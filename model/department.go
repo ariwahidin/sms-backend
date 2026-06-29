@@ -7,6 +7,7 @@ type Department struct {
 	Name      string    `gorm:"size:150;not null" json:"name"`
 	Site      string    `gorm:"size:100" json:"site"`
 	IsActive  bool      `gorm:"default:true" json:"is_active"`
+	Notes     string    `gorm:"type:nvarchar(100)" json:"notes"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

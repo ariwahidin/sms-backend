@@ -42,3 +42,27 @@ func (r *UserRepository) ExistsByUsername(username string) bool {
 	database.DB.Model(&model.User{}).Where("username = ?", username).Count(&count)
 	return count > 0
 }
+
+// FindActivePICs returns all active PIC users across all departments.
+// When filterByDepartment is true, only returns PICs in the given departmentID.
+func (r *UserRepository) FindActivePICs(filterByDepartment bool, departmentID uint) ([]model.User, error) {
+	var users []model.User
+	q := database.DB.Where("role = ? AND is_active = 1", model.RolePIC)
+	if filterByDepartment && departmentID > 0 {
+		q = q.Where("department_id = ?", departmentID)
+	}
+	err := q.Find(&users).Error
+	return users, err
+}
+
+// FindActiveHODsByDepartment returns active HOD users for a specific department.
+// If departmentID is 0, returns all active HODs.
+func (r *UserRepository) FindActiveHODsByDepartment(departmentID uint) ([]model.User, error) {
+	var users []model.User
+	q := database.DB.Where("role = ? AND is_active = 1", model.RoleHOD)
+	if departmentID > 0 {
+		q = q.Where("department_id = ?", departmentID)
+	}
+	err := q.Find(&users).Error
+	return users, err
+}

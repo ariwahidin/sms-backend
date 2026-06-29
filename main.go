@@ -34,9 +34,12 @@ func main() {
 	seedAdmin()
 
 	// ── 4. Wire dependencies ──────────────────────────────────────────────────
-	emailSvc := email.NewEmailService()
+	// emailSvc := email.NewEmailService()
+	// userRepo := repository.NewUserRepository()
 
 	userRepo := repository.NewUserRepository()
+	emailSvc := email.NewEmailService(userRepo)
+
 	locationRepo := repository.NewLocationRepository()
 	deptRepo := repository.NewDepartmentRepository()
 	reportRepo := repository.NewReportRepository()

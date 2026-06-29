@@ -305,13 +305,14 @@ func (s *ReportService) Declare(input DeclareInput) (*model.RiskReport, error) {
 	}
 
 	report := &model.RiskReport{
-		Code:         code,
-		LocationID:   input.LocationID,
-		DepartmentID: input.DepartmentID,
-		Description:  input.Description,
-		RiskLevel:    input.RiskLevel,
-		Status:       model.StatusDeclaration,
-		ReporterName: input.ReporterName,
+		Code:            code,
+		LocationID:      input.LocationID,
+		DepartmentID:    input.DepartmentID,
+		Description:     input.Description,
+		RiskLevelOrigin: input.RiskLevel,
+		RiskLevel:       input.RiskLevel,
+		Status:          model.StatusDeclaration,
+		ReporterName:    input.ReporterName,
 	}
 
 	tx := database.DB.Begin()

@@ -43,17 +43,18 @@ var SLAHours = map[Priority]map[string]int{
 }
 
 type RiskReport struct {
-	ID           uint         `gorm:"primaryKey;autoIncrement" json:"id"`
-	Code         string       `gorm:"uniqueIndex;size:20;not null" json:"code"`
-	LocationID   *uint        `json:"location_id"`
-	Location     *Location    `gorm:"foreignKey:LocationID" json:"location,omitempty"`
-	DepartmentID *uint        `json:"department_id"`
-	Department   *Department  `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
-	Description  string       `gorm:"type:nvarchar(max);not null" json:"description"`
-	RiskLevel    RiskLevel    `gorm:"size:20;not null;default:'low'" json:"risk_level"`
-	Priority     Priority     `gorm:"size:20" json:"priority"`
-	Status       ReportStatus `gorm:"size:30;not null;default:'declaration'" json:"status"`
-	ReporterName string       `gorm:"size:150" json:"reporter_name"`
+	ID              uint         `gorm:"primaryKey;autoIncrement" json:"id"`
+	Code            string       `gorm:"uniqueIndex;size:20;not null" json:"code"`
+	LocationID      *uint        `json:"location_id"`
+	Location        *Location    `gorm:"foreignKey:LocationID" json:"location,omitempty"`
+	DepartmentID    *uint        `json:"department_id"`
+	Department      *Department  `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
+	Description     string       `gorm:"type:nvarchar(max);not null" json:"description"`
+	RiskLevelOrigin RiskLevel    `gorm:"size:20;not null;default:'low'" json:"risk_level_origin"`
+	RiskLevel       RiskLevel    `gorm:"size:20;not null;default:'low'" json:"risk_level"`
+	Priority        Priority     `gorm:"size:20" json:"priority"`
+	Status          ReportStatus `gorm:"size:30;not null;default:'declaration'" json:"status"`
+	ReporterName    string       `gorm:"size:150" json:"reporter_name"`
 
 	// PIC fields (classification step)
 	PICID        *uint      `json:"pic_id"`

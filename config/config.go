@@ -20,8 +20,9 @@ type Configuration struct {
 }
 
 type AppConfig struct {
-	Port string
-	Env  string
+	Port   string
+	Env    string
+	AppURL string
 }
 
 type DBConfig struct {
@@ -77,8 +78,9 @@ func Load() {
 
 	Cfg = &Configuration{
 		App: AppConfig{
-			Port: getEnv("APP_PORT", "8080"),
-			Env:  getEnv("APP_ENV", "development"),
+			Port:   getEnv("APP_PORT", "8080"),
+			Env:    getEnv("APP_ENV", "development"),
+			AppURL: getEnv("APP_URL", "http://localhost:3000"),
 		},
 		DB: DBConfig{
 			Host:     getEnv("DB_HOST", "localhost"),

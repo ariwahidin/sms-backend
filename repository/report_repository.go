@@ -211,11 +211,22 @@ func NewReportRepository() *ReportRepository {
 }
 
 func (r *ReportRepository) GenerateCode() (string, error) {
+	now := time.Now()
+	year := now.Year() % 100 // ambil 2 digit terakhir (2026 -> 26)
+
+	// Hitung laporan yang dibuat di tahun ini saja
 	var count int64
-	if err := database.DB.Model(&model.RiskReport{}).Count(&count).Error; err != nil {
+	startOfYear := time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location())
+	endOfYear := time.Date(now.Year()+1, 1, 1, 0, 0, 0, 0, now.Location())
+
+	if err := database.DB.Model(&model.RiskReport{}).
+		Where("created_at >= ? AND created_at < ?", startOfYear, endOfYear).
+		Count(&count).Error; err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("R%06d", count+1), nil
+
+	// Format: YI + 2 digit tahun + 4 digit nomor urut
+	return fmt.Sprintf("YI%02d%04d", year, count+1), nil
 }
 
 func (r *ReportRepository) Create(report *model.RiskReport) error {
