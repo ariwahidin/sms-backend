@@ -30,6 +30,7 @@ type CreateUserInput struct {
 
 type UpdateUserInput struct {
 	Name         string     `json:"name"`
+	Username     string     `json:"username"`
 	Email        string     `json:"email"`
 	Role         model.Role `json:"role"`
 	DepartmentID *uint      `json:"department_id"`
@@ -45,11 +46,28 @@ func (s *UserService) Update(id uint, input UpdateUserInput) (*model.User, error
 	if input.Name != "" {
 		user.Name = input.Name
 	}
-	user.Email = input.Email
+
+	if input.Username != "" && input.Username != user.Username && s.userRepo.ExistsByUsername(input.Username) {
+		return nil, errors.New("username already exists")
+	}
+
+	if input.Username != "" {
+		user.Username = input.Username
+	}
+
+	if user.Username == "" {
+		return nil, errors.New("username is required")
+	}
+
+	if input.Email != "" {
+		user.Email = input.Email
+	}
 	if input.Role != "" {
 		user.Role = input.Role
 	}
-	user.DepartmentID = input.DepartmentID
+	if input.DepartmentID != nil {
+		user.DepartmentID = input.DepartmentID
+	}
 	if input.IsActive != nil {
 		user.IsActive = *input.IsActive
 	}
@@ -60,6 +78,7 @@ func (s *UserService) Update(id uint, input UpdateUserInput) (*model.User, error
 		}
 		user.Password = hashed
 	}
+
 	return user, s.userRepo.Update(user)
 }
 

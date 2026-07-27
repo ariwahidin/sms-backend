@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"mime/multipart"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"sms-backend/config"
+	"sms-backend/email"
 	"sms-backend/middleware"
 	"sms-backend/model"
 	"sms-backend/repository"
@@ -16,12 +18,17 @@ import (
 )
 
 type ReportHandler struct {
-	reportSvc  *service.ReportService
-	reportRepo *repository.ReportRepository
+	reportSvc    *service.ReportService
+	reportRepo   *repository.ReportRepository
+	emailService *email.EmailService // baru
 }
 
-func NewReportHandler(reportSvc *service.ReportService, reportRepo *repository.ReportRepository) *ReportHandler {
-	return &ReportHandler{reportSvc: reportSvc, reportRepo: reportRepo}
+func NewReportHandler(reportSvc *service.ReportService, reportRepo *repository.ReportRepository, emailService *email.EmailService) *ReportHandler {
+	return &ReportHandler{
+		reportSvc:    reportSvc,
+		reportRepo:   reportRepo,
+		emailService: emailService,
+	}
 }
 
 func (h *ReportHandler) Declare(c *fiber.Ctx) error {
@@ -102,6 +109,20 @@ func (h *ReportHandler) GetAll(c *fiber.Ctx) error {
 	})
 }
 
+// func (h *ReportHandler) GetByID(c *fiber.Ctx) error {
+// 	id, err := strconv.ParseUint(c.Params("id"), 10, 64)
+// 	if err != nil {
+// 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid ID"})
+// 	}
+
+// 	report, err := h.reportRepo.FindByID(uint(id))
+// 	if err != nil {
+// 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Report not found"})
+// 	}
+
+// 	return c.JSON(report)
+// }
+
 func (h *ReportHandler) GetByID(c *fiber.Ctx) error {
 	id, err := strconv.ParseUint(c.Params("id"), 10, 64)
 	if err != nil {
@@ -113,7 +134,12 @@ func (h *ReportHandler) GetByID(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Report not found"})
 	}
 
-	return c.JSON(report)
+	recipients := h.emailService.GetRecipientDetails(report)
+
+	return c.JSON(fiber.Map{
+		"report":     report,
+		"recipients": recipients,
+	})
 }
 
 func (h *ReportHandler) Classify(c *fiber.Ctx) error {
@@ -122,9 +148,26 @@ func (h *ReportHandler) Classify(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid ID"})
 	}
 
-	var input service.ClassifyInput
-	if err := c.BodyParser(&input); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	input := service.ClassifyInput{
+		RiskLevel: model.RiskLevel(c.FormValue("risk_level")),
+		Priority:  model.Priority(c.FormValue("priority")),
+		Notes:     c.FormValue("notes"),
+	}
+
+	if picID := c.FormValue("pic_id"); picID != "" {
+		pid, err := strconv.ParseUint(picID, 10, 64)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid pic_id"})
+		}
+		uid := uint(pid)
+		input.PICID = &uid
+	}
+
+	if form, err := c.MultipartForm(); err == nil && form != nil && len(form.File["files"]) > 0 {
+		if len(form.File["files"]) > 10 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Maximum 10 files allowed"})
+		}
+		input.Files = form.File["files"]
 	}
 
 	claims := middleware.GetClaims(c)
@@ -145,9 +188,16 @@ func (h *ReportHandler) Investigate(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid ID"})
 	}
 
-	var input service.InvestigateInput
-	if err := c.BodyParser(&input); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	input := service.InvestigateInput{
+		RootCause:       c.FormValue("root_cause"),
+		Countermeasures: c.FormValue("countermeasures"),
+	}
+
+	if form, err := c.MultipartForm(); err == nil && form != nil && len(form.File["files"]) > 0 {
+		if len(form.File["files"]) > 10 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Maximum 10 files allowed"})
+		}
+		input.Files = form.File["files"]
 	}
 
 	claims := middleware.GetClaims(c)
@@ -168,13 +218,18 @@ func (h *ReportHandler) Approve(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid ID"})
 	}
 
-	var body struct {
-		Comment string `json:"comment"`
+	comment := c.FormValue("comment")
+
+	var files []*multipart.FileHeader
+	if form, err := c.MultipartForm(); err == nil && form != nil && len(form.File["files"]) > 0 {
+		if len(form.File["files"]) > 10 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Maximum 10 files allowed"})
+		}
+		files = form.File["files"]
 	}
-	c.BodyParser(&body)
 
 	claims := middleware.GetClaims(c)
-	report, err := h.reportSvc.Approve(uint(id), body.Comment, claims.UserID, claims.Name)
+	report, err := h.reportSvc.Approve(uint(id), comment, files, claims.UserID, claims.Name)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -188,18 +243,21 @@ func (h *ReportHandler) Reject(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid ID"})
 	}
 
-	var body struct {
-		Comment string `json:"comment"`
-	}
-	if err := c.BodyParser(&body); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
-	}
-	if body.Comment == "" {
+	comment := c.FormValue("comment")
+	if comment == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Rejection reason (comment) is required"})
 	}
 
+	var files []*multipart.FileHeader
+	if form, err := c.MultipartForm(); err == nil && form != nil && len(form.File["files"]) > 0 {
+		if len(form.File["files"]) > 10 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Maximum 10 files allowed"})
+		}
+		files = form.File["files"]
+	}
+
 	claims := middleware.GetClaims(c)
-	report, err := h.reportSvc.Reject(uint(id), body.Comment, claims.UserID, claims.Name)
+	report, err := h.reportSvc.Reject(uint(id), comment, files, claims.UserID, claims.Name)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -227,7 +285,8 @@ func (h *ReportHandler) UploadFile(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid ID"})
 	}
 
-	if _, err := h.reportRepo.FindByID(uint(id)); err != nil {
+	report, err := h.reportRepo.FindByID(uint(id))
+	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Report not found"})
 	}
 
@@ -247,13 +306,31 @@ func (h *ReportHandler) UploadFile(c *fiber.Ctx) error {
 
 	claims := middleware.GetClaims(c)
 	var uploaderID *uint
+	uploaderName := ""
 	if claims != nil {
 		uid := claims.UserID
 		uploaderID = &uid
+		uploaderName = claims.Name
+	}
+
+	// buat activity dulu, supaya dapat ID-nya untuk dikaitkan ke file
+	activity := &model.ReportActivity{
+		ReportID:   uint(id),
+		Action:     "upload_file",
+		FromStatus: report.Status,
+		ToStatus:   report.Status,
+		Notes:      fmt.Sprintf("Uploaded file: %s", fileHeader.Filename),
+		ByUserID:   uploaderID,
+		ByUserName: uploaderName,
+	}
+	if err := h.reportRepo.AddActivity(activity); err != nil {
+		service.CleanupFiles([]string{savePath})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to log activity"})
 	}
 
 	reportFile := &model.ReportFile{
 		ReportID:   uint(id),
+		ActivityID: &activity.ID,
 		FileName:   fileHeader.Filename,
 		FilePath:   savePath,
 		FileSize:   fileHeader.Size,
@@ -265,6 +342,9 @@ func (h *ReportHandler) UploadFile(c *fiber.Ctx) error {
 		service.CleanupFiles([]string{savePath})
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save file record"})
 	}
+
+	// muat ulang relasi Activity supaya response ke frontend lengkap
+	reportFile.Activity = activity
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"message": "File uploaded successfully",

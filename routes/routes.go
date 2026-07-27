@@ -28,6 +28,8 @@ func Setup(
 
 	// Declaration (no auth — anonymous allowed)
 	api.Post("/reports", reportH.Declare)
+	api.Get("/no-auth/departments", deptH.GetAll)
+	api.Get("/no-auth/locations", locationH.GetAll)
 
 	// ── Protected routes ──────────────────────────────────────────────────────
 	protected := api.Group("", middleware.Auth(authSvc))

@@ -90,14 +90,16 @@ type RiskReport struct {
 }
 
 type ReportFile struct {
-	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	ReportID   uint      `gorm:"not null;index" json:"report_id"`
-	FileName   string    `gorm:"size:255" json:"file_name"`
-	FilePath   string    `gorm:"size:500" json:"file_path"`
-	FileSize   int64     `json:"file_size"`
-	MimeType   string    `gorm:"size:100" json:"mime_type"`
-	UploadedBy *uint     `json:"uploaded_by"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID         uint            `gorm:"primaryKey;autoIncrement" json:"id"`
+	ReportID   uint            `gorm:"not null;index" json:"report_id"`
+	ActivityID *uint           `gorm:"index" json:"activity_id"`
+	Activity   *ReportActivity `gorm:"foreignKey:ActivityID" json:"activity,omitempty"`
+	FileName   string          `gorm:"size:255" json:"file_name"`
+	FilePath   string          `gorm:"size:500" json:"file_path"`
+	FileSize   int64           `json:"file_size"`
+	MimeType   string          `gorm:"size:100" json:"mime_type"`
+	UploadedBy *uint           `json:"uploaded_by"`
+	CreatedAt  time.Time       `json:"created_at"`
 }
 
 type ReportActivity struct {
@@ -110,4 +112,6 @@ type ReportActivity struct {
 	ByUserID   *uint        `json:"by_user_id"`
 	ByUserName string       `gorm:"size:150" json:"by_user_name"`
 	CreatedAt  time.Time    `json:"created_at"`
+
+	Files []ReportFile `gorm:"foreignKey:ActivityID" json:"files,omitempty"` // reverse relation, file-file yang lahir dari activity ini
 }

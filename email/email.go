@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"time"
 
 	"gopkg.in/gomail.v2"
 
@@ -21,15 +20,44 @@ func NewEmailService(userRepo *repository.UserRepository) *EmailService {
 	return &EmailService{userRepo: userRepo}
 }
 
-func (e *EmailService) send(to []string, subject, body string) {
+// func (e *EmailService) send(to []string, subject, body string) {
+// 	if config.Cfg.SMTP.Host == "" {
+// 		log.Printf("[EMAIL] SMTP not configured, skipping email to %v | subject: %s", to, subject)
+// 		return
+// 	}
+
+// 	m := gomail.NewMessage()
+// 	m.SetHeader("From", config.Cfg.SMTP.From)
+// 	m.SetHeader("To", to...)
+// 	m.SetHeader("Subject", subject)
+// 	m.SetBody("text/html", body)
+
+// 	d := gomail.NewDialer(
+// 		config.Cfg.SMTP.Host,
+// 		config.Cfg.SMTP.Port,
+// 		config.Cfg.SMTP.User,
+// 		config.Cfg.SMTP.Password,
+// 	)
+
+// 	if err := d.DialAndSend(m); err != nil {
+// 		log.Printf("[EMAIL] Failed to send to %v: %v", to, err)
+// 		return
+// 	}
+// 	log.Printf("[EMAIL] Sent '%s' to %v", subject, to)
+// }
+
+func (e *EmailService) send(to, cc []string, subject, body string) {
 	if config.Cfg.SMTP.Host == "" {
-		log.Printf("[EMAIL] SMTP not configured, skipping email to %v | subject: %s", to, subject)
+		log.Printf("[EMAIL] SMTP not configured, skipping email to %v cc %v | subject: %s", to, cc, subject)
 		return
 	}
 
 	m := gomail.NewMessage()
 	m.SetHeader("From", config.Cfg.SMTP.From)
 	m.SetHeader("To", to...)
+	if len(cc) > 0 {
+		m.SetHeader("Cc", cc...)
+	}
 	m.SetHeader("Subject", subject)
 	m.SetBody("text/html", body)
 
@@ -41,10 +69,10 @@ func (e *EmailService) send(to []string, subject, body string) {
 	)
 
 	if err := d.DialAndSend(m); err != nil {
-		log.Printf("[EMAIL] Failed to send to %v: %v", to, err)
+		log.Printf("[EMAIL] Failed to send to %v cc %v: %v", to, cc, err)
 		return
 	}
-	log.Printf("[EMAIL] Sent '%s' to %v", subject, to)
+	log.Printf("[EMAIL] Sent '%s' to %v cc %v", subject, to, cc)
 }
 
 // collectEmails extracts unique non-empty emails from a user slice.
@@ -60,66 +88,96 @@ func collectEmails(users []model.User) []string {
 	return out
 }
 
-// getDeclarationRecipients returns emails for:
-//   - All active PICs (all departments for now; pass filterPICByDept=true to scope by dept)
-//   - Active HODs in the report's department only
-func (e *EmailService) getDeclarationRecipients(report *model.RiskReport) []string {
+type Recipient struct {
+	Name       string `json:"name"`
+	Email      string `json:"email"`
+	Role       string `json:"role"`
+	Department string `json:"department"`
+}
+
+// tidak berubah — dipakai SendDeclarationNotice
+// func (e *EmailService) GetRecipients(report *model.RiskReport) []string {
+// 	all := e.getRecipientUsers(report)
+// 	return collectEmails(all)
+// }
+
+// tetap dipakai SendDeclarationNotice, tapi sekarang return (to, cc)
+func (e *EmailService) GetRecipients(report *model.RiskReport) (to []string, cc []string) {
+	pics, hods := e.getRecipientUsersSplit(report)
+	to = collectEmails(pics)
+	cc = collectEmails(hods)
+	return to, cc
+}
+
+// baru — dipakai ReportHandler.GetByID buat ditampilkan di UI
+func (e *EmailService) GetRecipientDetails(report *model.RiskReport) []Recipient {
+	pics, hods := e.getRecipientUsersSplit(report)
+
+	var recipients []Recipient
+	for _, u := range pics {
+		dept := ""
+		if u.Department != nil {
+			dept = u.Department.Name
+		}
+		recipients = append(recipients, Recipient{Name: u.Name, Email: u.Email, Role: "pic", Department: dept})
+	}
+	for _, u := range hods {
+		dept := ""
+		if u.Department != nil {
+			dept = u.Department.Name
+		}
+		recipients = append(recipients, Recipient{Name: u.Name, Email: u.Email, Role: "hod", Department: dept})
+	}
+	return recipients
+}
+
+func (e *EmailService) getRecipientUsersSplit(report *model.RiskReport) (pics, hods []model.User) {
 	var deptID uint
 	if report.DepartmentID != nil {
 		deptID = *report.DepartmentID
 	}
-
-	log.Printf("[EMAIL] Declaring recipients for %s (deptID: %d)", report.Code, deptID)
-
-	// PIC: all active PICs across all departments.
-	// To restrict to department: change false → true.
-	pics, err := e.userRepo.FindActivePICs(false, deptID)
+	var err error
+	pics, err = e.userRepo.FindActivePICs(false, deptID)
 	if err != nil {
 		log.Printf("[EMAIL] Failed to query PICs: %v", err)
 	}
-
-	// HOD: active HODs in the report's department only.
-	hods, err := e.userRepo.FindActiveHODsByDepartment(deptID)
+	hods, err = e.userRepo.FindActiveHODsByDepartment(deptID)
 	if err != nil {
 		log.Printf("[EMAIL] Failed to query HODs: %v", err)
 	}
-
-	all := append(pics, hods...)
-	return collectEmails(all)
+	return pics, hods
 }
 
-func (e *EmailService) getRecipients(report *model.RiskReport) []string {
-	var deptID uint
-	if report.DepartmentID != nil {
-		deptID = *report.DepartmentID
-	}
-
-	log.Printf("[EMAIL] Declaring recipients for %s (deptID: %d)", report.Code, deptID)
-
-	// PIC: all active PICs across all departments.
-	// To restrict to department: change false → true.
-	pics, err := e.userRepo.FindActivePICs(false, deptID)
-	if err != nil {
-		log.Printf("[EMAIL] Failed to query PICs: %v", err)
-	}
-
-	// HOD: active HODs in the report's department only.
-	hods, err := e.userRepo.FindActiveHODsByDepartment(deptID)
-	if err != nil {
-		log.Printf("[EMAIL] Failed to query HODs: %v", err)
-	}
-
-	all := append(pics, hods...)
-	return collectEmails(all)
+func (e *EmailService) getRecipientUsers(report *model.RiskReport) []model.User {
+	pics, hods := e.getRecipientUsersSplit(report)
+	return append(pics, hods...)
 }
 
-// getRecipients returns the assigned PIC's email (used post-classification).
-// func (e *EmailService) getRecipients(report *model.RiskReport) []string {
-// 	var recipients []string
-// 	if report.PIC != nil && report.PIC.Email != "" {
-// 		recipients = append(recipients, report.PIC.Email)
+// func (e *EmailService) GetRecipients(report *model.RiskReport) []string {
+// 	var deptID uint
+// 	if report.DepartmentID != nil {
+// 		deptID = *report.DepartmentID
 // 	}
-// 	return recipients
+
+// 	log.Printf("[EMAIL] Declaring recipients for %s (deptID: %d)", report.Code, deptID)
+
+// 	// PIC: all active PICs across all departments.
+// 	// To restrict to department: change false → true.
+// 	pics, err := e.userRepo.FindActivePICs(false, deptID)
+// 	if err != nil {
+// 		log.Printf("[EMAIL] Failed to query PICs: %v", err)
+// 	}
+
+// 	// HOD: active HODs in the report's department only.
+// 	hods, err := e.userRepo.FindActiveHODsByDepartment(deptID)
+// 	if err != nil {
+// 		log.Printf("[EMAIL] Failed to query HODs: %v", err)
+// 	}
+
+// 	all := append(pics, hods...)
+
+// 	log.Printf("[EMAIL] Declared %d recipients for %s", len(all), report.Code)
+// 	return collectEmails(all)
 // }
 
 func (e *EmailService) SendDeclarationNotice(report *model.RiskReport) {
@@ -133,12 +191,12 @@ func (e *EmailService) SendDeclarationNotice(report *model.RiskReport) {
 		{"Reported At", report.CreatedAt.Format("02 Jan 2006, 15:04 WIB")},
 		{"View Report", fmt.Sprintf("%s/reports/%d", config.Cfg.App.AppURL, report.ID)},
 	})
-	recipients := e.getDeclarationRecipients(report)
-	if len(recipients) == 0 {
+	to, cc := e.GetRecipients(report)
+	if len(to) == 0 && len(cc) == 0 {
 		log.Printf("[EMAIL] No recipients for declaration notice %s", report.Code)
 		return
 	}
-	e.send(recipients, subject, body)
+	e.send(to, cc, subject, body)
 }
 
 func (e *EmailService) SendStatusUpdateNotice(report *model.RiskReport, action string) {
@@ -153,11 +211,12 @@ func (e *EmailService) SendStatusUpdateNotice(report *model.RiskReport, action s
 		{"Updated At", report.UpdatedAt.Format("02 Jan 2006, 15:04 WIB")},
 		{"View Report", fmt.Sprintf("%s/reports/%d", config.Cfg.App.AppURL, report.ID)},
 	})
-	recipients := e.getRecipients(report)
-	if len(recipients) == 0 {
+	to, cc := e.GetRecipients(report)
+	if len(to) == 0 && len(cc) == 0 {
+		log.Printf("[EMAIL] No recipients for declaration notice %s", report.Code)
 		return
 	}
-	e.send(recipients, subject, body)
+	e.send(to, cc, subject, body)
 }
 
 func (e *EmailService) SendReviewNotice(report *model.RiskReport) {
@@ -172,11 +231,12 @@ func (e *EmailService) SendReviewNotice(report *model.RiskReport) {
 		{"Investigated At", report.InvestigatedAt.Format("02 Jan 2006, 15:04 WIB")},
 		{"View Report", fmt.Sprintf("%s/reports/%d", config.Cfg.App.AppURL, report.ID)},
 	})
-	recipients := e.getRecipients(report)
-	if len(recipients) == 0 {
+	to, cc := e.GetRecipients(report)
+	if len(to) == 0 && len(cc) == 0 {
+		log.Printf("[EMAIL] No recipients for declaration notice %s", report.Code)
 		return
 	}
-	e.send(recipients, subject, body)
+	e.send(to, cc, subject, body)
 }
 
 func (e *EmailService) SendClosingNotice(report *model.RiskReport) {
@@ -190,11 +250,12 @@ func (e *EmailService) SendClosingNotice(report *model.RiskReport) {
 		{"Approved At", report.ApprovedAt.Format("02 Jan 2006, 15:04 WIB")},
 		{"View Report", fmt.Sprintf("%s/reports/%d", config.Cfg.App.AppURL, report.ID)},
 	})
-	recipients := e.getRecipients(report)
-	if len(recipients) == 0 {
+	to, cc := e.GetRecipients(report)
+	if len(to) == 0 && len(cc) == 0 {
+		log.Printf("[EMAIL] No recipients for declaration notice %s", report.Code)
 		return
 	}
-	e.send(recipients, subject, body)
+	e.send(to, cc, subject, body)
 }
 
 func (e *EmailService) SendRejectionNotice(report *model.RiskReport) {
@@ -208,11 +269,12 @@ func (e *EmailService) SendRejectionNotice(report *model.RiskReport) {
 		{"Rejected At", report.RejectedAt.Format("02 Jan 2006, 15:04 WIB")},
 		{"View Report", fmt.Sprintf("%s/reports/%d", config.Cfg.App.AppURL, report.ID)},
 	})
-	recipients := e.getRecipients(report)
-	if len(recipients) == 0 {
+	to, cc := e.GetRecipients(report)
+	if len(to) == 0 && len(cc) == 0 {
+		log.Printf("[EMAIL] No recipients for declaration notice %s", report.Code)
 		return
 	}
-	e.send(recipients, subject, body)
+	e.send(to, cc, subject, body)
 }
 
 func (e *EmailService) SendSLAOverdueAlert(report *model.RiskReport) {
@@ -226,11 +288,12 @@ func (e *EmailService) SendSLAOverdueAlert(report *model.RiskReport) {
 		{"Reported At", report.CreatedAt.Format("02 Jan 2006, 15:04 WIB")},
 		{"View Report", fmt.Sprintf("%s/reports/%d", config.Cfg.App.AppURL, report.ID)},
 	})
-	recipients := e.getRecipients(report)
-	if len(recipients) == 0 {
+	to, cc := e.GetRecipients(report)
+	if len(to) == 0 && len(cc) == 0 {
+		log.Printf("[EMAIL] No recipients for declaration notice %s", report.Code)
 		return
 	}
-	e.send(recipients, subject, body)
+	e.send(to, cc, subject, body)
 }
 
 type emailField struct {
@@ -270,11 +333,4 @@ func safeStr(s, fallback string) string {
 		return fallback
 	}
 	return s
-}
-
-func formatTime(t *time.Time) string {
-	if t == nil {
-		return "—"
-	}
-	return t.Format("02 Jan 2006, 15:04 WIB")
 }

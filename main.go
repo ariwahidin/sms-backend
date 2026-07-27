@@ -51,7 +51,7 @@ func main() {
 	reportSvc := service.NewReportService(reportRepo, emailSvc)
 
 	authH := handler.NewAuthHandler(authSvc)
-	reportH := handler.NewReportHandler(reportSvc, reportRepo)
+	reportH := handler.NewReportHandler(reportSvc, reportRepo, emailSvc)
 	locationH := handler.NewLocationHandler(locationSvc)
 	deptH := handler.NewDepartmentHandler(deptSvc)
 	userH := handler.NewUserHandler(userSvc)

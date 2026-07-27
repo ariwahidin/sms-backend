@@ -34,7 +34,7 @@ func (r *UserRepository) Create(user *model.User) error {
 }
 
 func (r *UserRepository) Update(user *model.User) error {
-	return database.DB.Save(user).Error
+	return database.DB.Omit("Department").Save(user).Error
 }
 
 func (r *UserRepository) ExistsByUsername(username string) bool {
@@ -47,7 +47,7 @@ func (r *UserRepository) ExistsByUsername(username string) bool {
 // When filterByDepartment is true, only returns PICs in the given departmentID.
 func (r *UserRepository) FindActivePICs(filterByDepartment bool, departmentID uint) ([]model.User, error) {
 	var users []model.User
-	q := database.DB.Where("role = ? AND is_active = 1", model.RolePIC)
+	q := database.DB.Preload("Department").Where("role = ? AND is_active = 1", model.RolePIC)
 	if filterByDepartment && departmentID > 0 {
 		q = q.Where("department_id = ?", departmentID)
 	}
@@ -59,7 +59,7 @@ func (r *UserRepository) FindActivePICs(filterByDepartment bool, departmentID ui
 // If departmentID is 0, returns all active HODs.
 func (r *UserRepository) FindActiveHODsByDepartment(departmentID uint) ([]model.User, error) {
 	var users []model.User
-	q := database.DB.Where("role = ? AND is_active = 1", model.RoleHOD)
+	q := database.DB.Preload("Department").Where("role = ? AND is_active = 1", model.RoleHOD)
 	if departmentID > 0 {
 		q = q.Where("department_id = ?", departmentID)
 	}

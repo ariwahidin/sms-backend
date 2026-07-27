@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strconv"
 
@@ -118,11 +119,25 @@ func Load() {
 	log.Printf("[CONFIG] App running on port %s | env: %s", Cfg.App.Port, Cfg.App.Env)
 }
 
+// func (d *DBConfig) DSN() string {
+// 	return fmt.Sprintf(
+// 		"sqlserver://%s:%s@%s:%s?database=%s",
+// 		d.User, d.Password, d.Host, d.Port, d.Name,
+// 	)
+// }
+
 func (d *DBConfig) DSN() string {
-	return fmt.Sprintf(
-		"sqlserver://%s:%s@%s:%s?database=%s",
-		d.User, d.Password, d.Host, d.Port, d.Name,
-	)
+	query := url.Values{}
+	query.Add("database", d.Name)
+
+	u := &url.URL{
+		Scheme:   "sqlserver",
+		User:     url.UserPassword(d.User, d.Password),
+		Host:     fmt.Sprintf("%s:%s", d.Host, d.Port),
+		RawQuery: query.Encode(),
+	}
+
+	return u.String()
 }
 
 func getEnv(key, fallback string) string {
