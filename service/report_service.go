@@ -15,6 +15,8 @@ import (
 	"sms-backend/email"
 	"sms-backend/model"
 	"sms-backend/repository"
+
+	"gorm.io/gorm"
 )
 
 type ReportService struct {
@@ -537,4 +539,281 @@ func sanitizeFileName(name string) string {
 		safe = safe[:50]
 	}
 	return safe
+}
+
+type RequestDetectionEditInput struct {
+	LocationID   *uint
+	DepartmentID *uint
+	RiskLevel    model.RiskLevel
+	Description  string
+	Reason       string
+
+	ByUserID   uint
+	ByUserName string
+}
+
+func (s *ReportService) RequestDetectionEdit(
+	reportID uint,
+	input RequestDetectionEditInput,
+) (*model.ReportEditRequest, error) {
+
+	report, err := s.reportRepo.FindByID(reportID)
+	if err != nil {
+		return nil, errors.New("report not found")
+	}
+
+	// Jangan boleh membuat request baru
+	// kalau masih ada pending request.
+	existing, err := s.reportRepo.FindPendingEditRequest(reportID)
+
+	if err == nil && existing != nil {
+		return nil, errors.New(
+			"this report already has a pending detection edit request",
+		)
+	}
+
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	// Validation
+	if strings.TrimSpace(input.Description) == "" {
+		return nil, errors.New("description is required")
+	}
+
+	if strings.TrimSpace(input.Reason) == "" {
+		return nil, errors.New("reason is required")
+	}
+
+	switch input.RiskLevel {
+	case model.RiskLow,
+		model.RiskMedium,
+		model.RiskHigh:
+	default:
+		return nil, errors.New("invalid risk level")
+	}
+
+	request := &model.ReportEditRequest{
+		ReportID: report.ID,
+
+		LocationID:   input.LocationID,
+		DepartmentID: input.DepartmentID,
+
+		RiskLevel:   input.RiskLevel,
+		Description: input.Description,
+
+		Reason: input.Reason,
+
+		RequestedBy:   &input.ByUserID,
+		RequestedName: input.ByUserName,
+
+		Status: model.EditRequestPending,
+	}
+
+	if err := s.reportRepo.CreateEditRequest(request); err != nil {
+		return nil, err
+	}
+
+	// Audit
+	activity := &model.ReportActivity{
+		ReportID: report.ID,
+
+		Action:     "request_detection_edit",
+		FromStatus: report.Status,
+		ToStatus:   report.Status,
+
+		Notes: fmt.Sprintf(
+			"Detection edit requested. Reason: %s",
+			input.Reason,
+		),
+
+		ByUserID:   &input.ByUserID,
+		ByUserName: input.ByUserName,
+	}
+
+	if err := s.reportRepo.AddActivity(activity); err != nil {
+		return nil, err
+	}
+
+	return request, nil
+}
+
+func (s *ReportService) ApproveDetectionEdit(
+	reportID uint,
+	requestID uint,
+	userID uint,
+	userName string,
+) (*model.RiskReport, error) {
+
+	tx := database.DB.Begin()
+
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	var request model.ReportEditRequest
+
+	if err := tx.
+		Preload("Location").
+		Preload("Department").
+		Where(
+			"id = ? AND report_id = ?",
+			requestID,
+			reportID,
+		).
+		First(&request).Error; err != nil {
+
+		tx.Rollback()
+
+		return nil, errors.New("edit request not found")
+	}
+
+	if request.Status != model.EditRequestPending {
+		tx.Rollback()
+
+		return nil, errors.New(
+			"edit request has already been processed",
+		)
+	}
+
+	var report model.RiskReport
+
+	if err := tx.First(&report, reportID).Error; err != nil {
+		tx.Rollback()
+
+		return nil, errors.New("report not found")
+	}
+
+	// =========================================================
+	// APPLY REQUESTED DETECTION
+	// =========================================================
+
+	report.LocationID = request.LocationID
+	report.DepartmentID = request.DepartmentID
+	report.RiskLevel = request.RiskLevel
+	report.Description = request.Description
+
+	if err := tx.Save(&report).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	// =========================================================
+	// APPROVE REQUEST
+	// =========================================================
+
+	now := time.Now()
+
+	request.Status = model.EditRequestApproved
+	request.ApprovedBy = &userID
+	request.ApprovedName = userName
+	request.ApprovedAt = &now
+
+	if err := tx.Save(&request).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	// =========================================================
+	// AUDIT
+	// =========================================================
+
+	activity := &model.ReportActivity{
+		ReportID: report.ID,
+
+		Action:     "approve_detection_edit",
+		FromStatus: report.Status,
+		ToStatus:   report.Status,
+
+		Notes: fmt.Sprintf(
+			"Detection edit approved. Request ID: %d",
+			request.ID,
+		),
+
+		ByUserID:   &userID,
+		ByUserName: userName,
+	}
+
+	if err := tx.Create(&activity).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+
+	return &report, nil
+}
+
+func (s *ReportService) RejectDetectionEdit(
+	reportID uint,
+	requestID uint,
+	note string,
+	userID uint,
+	userName string,
+) error {
+
+	if strings.TrimSpace(note) == "" {
+		return errors.New("rejection reason is required")
+	}
+
+	request, err := s.reportRepo.FindEditRequestByID(
+		reportID,
+		requestID,
+	)
+
+	if err != nil {
+		return errors.New("edit request not found")
+	}
+
+	if request.Status != model.EditRequestPending {
+		return errors.New(
+			"edit request has already been processed",
+		)
+	}
+
+	now := time.Now()
+
+	request.Status = model.EditRequestRejected
+
+	request.RejectedBy = &userID
+	request.RejectedName = userName
+	request.RejectedAt = &now
+
+	request.ApprovalNote = note
+
+	if err := s.reportRepo.UpdateEditRequest(request); err != nil {
+		return err
+	}
+
+	report, err := s.reportRepo.FindByID(reportID)
+	if err != nil {
+		return err
+	}
+
+	activity := &model.ReportActivity{
+		ReportID: report.ID,
+
+		Action:     "reject_detection_edit",
+		FromStatus: report.Status,
+		ToStatus:   report.Status,
+
+		Notes: fmt.Sprintf(
+			"Detection edit rejected. Request ID: %d. Reason: %s",
+			request.ID,
+			note,
+		),
+
+		ByUserID:   &userID,
+		ByUserName: userName,
+	}
+
+	return s.reportRepo.AddActivity(activity)
 }

@@ -48,6 +48,7 @@ func autoMigrate() {
 		&model.RiskReport{},
 		&model.ReportFile{},
 		&model.ReportActivity{},
+		&model.ReportEditRequest{},
 	)
 	if err != nil {
 		log.Fatalf("[DATABASE] Migration failed: %v", err)

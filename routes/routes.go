@@ -41,6 +41,25 @@ func Setup(
 	protected.Get("/reports/:id/files/:file_id", reportH.ServeFile)
 	protected.Post("/reports/:id/files", reportH.UploadFile)
 
+	// Detection edit request
+	protected.Post(
+		"/reports/:id/edit-request",
+		reportH.RequestDetectionEdit,
+	)
+
+	// PIC / Admin approval
+	protected.Post(
+		"/reports/:id/edit-request/:request_id/approve",
+		middleware.RequireRole(model.RolePIC, model.RoleAdmin),
+		reportH.ApproveDetectionEdit,
+	)
+
+	protected.Post(
+		"/reports/:id/edit-request/:request_id/reject",
+		middleware.RequireRole(model.RolePIC, model.RoleAdmin),
+		reportH.RejectDetectionEdit,
+	)
+
 	// HOD / Admin only
 	protected.Post("/reports/:id/approve", middleware.RequireRole(model.RoleHOD, model.RoleAdmin), reportH.Approve)
 	protected.Post("/reports/:id/reject", middleware.RequireRole(model.RoleHOD, model.RoleAdmin), reportH.Reject)
@@ -53,14 +72,14 @@ func Setup(
 	protected.Get("/dashboard", reportH.Dashboard)
 
 	// Departments
-	protected.Get("/departments", deptH.GetAll)
-	protected.Post("/departments", middleware.RequireRole(model.RoleAdmin), deptH.Create)
-	protected.Patch("/departments/:id", middleware.RequireRole(model.RoleAdmin), deptH.Update)
+	protected.Get("/departments", middleware.RequireRole(model.RoleAdmin, model.RolePIC, model.RoleHOD), deptH.GetAll)
+	protected.Post("/departments", middleware.RequireRole(model.RoleAdmin, model.RolePIC), deptH.Create)
+	protected.Patch("/departments/:id", middleware.RequireRole(model.RoleAdmin, model.RolePIC), deptH.Update)
 
 	// Locations
-	protected.Get("/locations", middleware.RequireRole(model.RoleAdmin), locationH.GetAll)
-	protected.Post("/locations", middleware.RequireRole(model.RoleAdmin), locationH.Create)
-	protected.Patch("/locations/:id", middleware.RequireRole(model.RoleAdmin), locationH.Update)
+	protected.Get("/locations", middleware.RequireRole(model.RoleAdmin, model.RolePIC, model.RoleHOD), locationH.GetAll)
+	protected.Post("/locations", middleware.RequireRole(model.RoleAdmin, model.RolePIC), locationH.Create)
+	protected.Patch("/locations/:id", middleware.RequireRole(model.RoleAdmin, model.RolePIC), locationH.Update)
 
 	// Users
 	protected.Get("/users", middleware.RequireRole(model.RoleAdmin), userH.GetAll)

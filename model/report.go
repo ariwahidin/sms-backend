@@ -85,6 +85,8 @@ type RiskReport struct {
 	Files      []ReportFile     `gorm:"foreignKey:ReportID" json:"files,omitempty"`
 	Activities []ReportActivity `gorm:"foreignKey:ReportID" json:"activities,omitempty"`
 
+	EditRequests []ReportEditRequest `gorm:"foreignKey:ReportID" json:"edit_requests,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

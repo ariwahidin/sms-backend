@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -20,13 +21,20 @@ import (
 type ReportHandler struct {
 	reportSvc    *service.ReportService
 	reportRepo   *repository.ReportRepository
-	emailService *email.EmailService // baru
+	userRepo     *repository.UserRepository
+	emailService *email.EmailService
 }
 
-func NewReportHandler(reportSvc *service.ReportService, reportRepo *repository.ReportRepository, emailService *email.EmailService) *ReportHandler {
+func NewReportHandler(
+	reportSvc *service.ReportService,
+	reportRepo *repository.ReportRepository,
+	userRepo *repository.UserRepository,
+	emailService *email.EmailService,
+) *ReportHandler {
 	return &ReportHandler{
 		reportSvc:    reportSvc,
 		reportRepo:   reportRepo,
+		userRepo:     userRepo,
 		emailService: emailService,
 	}
 }
@@ -84,21 +92,94 @@ func (h *ReportHandler) GetAll(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	pageSize, _ := strconv.Atoi(c.Query("page_size", "25"))
 
-	filters := map[string]interface{}{
-		"status":        c.Query("status"),
-		"site":          c.Query("site"),
-		"department_id": c.Query("department_id"),
-		"risk_level":    c.Query("risk_level"),
-		"date_from":     c.Query("date_from"),
-		"date_to":       c.Query("date_to"),
-		"page":          page,
-		"page_size":     pageSize,
+	if page < 1 {
+		page = 1
 	}
 
-	reports, total, err := h.reportRepo.FindAll(filters)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+	if pageSize < 1 {
+		pageSize = 25
 	}
+
+	if pageSize > 100 {
+		pageSize = 100
+	}
+
+	// ============================================================
+	// GET CURRENT USER
+	// ============================================================
+
+	claims := middleware.GetClaims(c)
+
+	if claims == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "Unauthorized",
+		})
+	}
+
+	// ============================================================
+	// BASE FILTERS
+	// ============================================================
+
+	filters := map[string]interface{}{
+		"status":     c.Query("status"),
+		"site":       c.Query("site"),
+		"risk_level": c.Query("risk_level"),
+		"date_from":  c.Query("date_from"),
+		"date_to":    c.Query("date_to"),
+		"page":       page,
+		"page_size":  pageSize,
+	}
+
+	// ============================================================
+	// DEPARTMENT ACCESS CONTROL
+	// ============================================================
+
+	if claims.Role == model.RoleAdmin || claims.Role == model.RolePIC {
+
+		// Admin & PIC boleh melihat semua department.
+		//
+		// Kalau frontend mengirim department_id,
+		// maka digunakan sebagai filter.
+		filters["department_id"] = c.Query("department_id")
+
+	} else {
+
+		// User selain Admin/PIC hanya boleh melihat
+		// report dari department miliknya sendiri.
+
+		user, err := h.userRepo.FindByID(claims.UserID)
+
+		if err != nil {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+				"error": "User not found or access denied",
+			})
+		}
+
+		if user.DepartmentID == nil {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+				"error": "User has no assigned department",
+			})
+		}
+
+		// Jangan gunakan department_id dari query parameter.
+		filters["department_id"] = *user.DepartmentID
+	}
+
+	// ============================================================
+	// GET REPORTS
+	// ============================================================
+
+	reports, total, err := h.reportRepo.FindAll(filters)
+
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
+
+	// ============================================================
+	// RESPONSE
+	// ============================================================
 
 	return c.JSON(fiber.Map{
 		"data":      reports,
@@ -403,4 +484,287 @@ func (h *ReportHandler) ServeFile(c *fiber.Ctx) error {
 	c.Set("Cache-Control", "private, max-age=3600")
 
 	return c.SendFile(absPath)
+}
+
+func (h *ReportHandler) RequestDetectionEdit(c *fiber.Ctx) error {
+
+	// =========================================================
+	// PARSE REPORT ID
+	// =========================================================
+
+	reportID, err := strconv.ParseUint(
+		c.Params("id"),
+		10,
+		64,
+	)
+
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			fiber.Map{
+				"error": "Invalid report ID",
+			},
+		)
+	}
+
+	// =========================================================
+	// REQUEST PAYLOAD
+	// =========================================================
+
+	type RequestDetectionEditPayload struct {
+		LocationID   *uint  `json:"location_id"`
+		DepartmentID *uint  `json:"department_id"`
+		RiskLevel    string `json:"risk_level"`
+		Description  string `json:"description"`
+		Reason       string `json:"reason"`
+	}
+
+	var payload RequestDetectionEditPayload
+
+	// =========================================================
+	// PARSE JSON BODY
+	// =========================================================
+
+	if err := c.BodyParser(&payload); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			fiber.Map{
+				"error": "Invalid request body",
+			},
+		)
+	}
+
+	// =========================================================
+	// VALIDATION
+	// =========================================================
+
+	if strings.TrimSpace(payload.Description) == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			fiber.Map{
+				"error": "description is required",
+			},
+		)
+	}
+
+	if strings.TrimSpace(payload.Reason) == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			fiber.Map{
+				"error": "reason is required",
+			},
+		)
+	}
+
+	// =========================================================
+	// BUILD SERVICE INPUT
+	// =========================================================
+
+	input := service.RequestDetectionEditInput{
+		Description:  payload.Description,
+		Reason:       payload.Reason,
+		RiskLevel:    model.RiskLevel(payload.RiskLevel),
+		LocationID:   payload.LocationID,
+		DepartmentID: payload.DepartmentID,
+	}
+
+	// =========================================================
+	// USER CLAIMS
+	// =========================================================
+
+	claims := middleware.GetClaims(c)
+
+	input.ByUserID = claims.UserID
+	input.ByUserName = claims.Name
+
+	// =========================================================
+	// REQUEST EDIT
+	// =========================================================
+
+	request, err := h.reportSvc.RequestDetectionEdit(
+		uint(reportID),
+		input,
+	)
+
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			fiber.Map{
+				"error": err.Error(),
+			},
+		)
+	}
+
+	// =========================================================
+	// RESPONSE
+	// =========================================================
+
+	return c.Status(fiber.StatusCreated).JSON(
+		fiber.Map{
+			"message": "Detection edit request submitted",
+			"request": request,
+		},
+	)
+}
+
+func (h *ReportHandler) ApproveDetectionEdit(c *fiber.Ctx) error {
+
+	reportID, err := strconv.ParseUint(
+		c.Params("id"),
+		10,
+		64,
+	)
+
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			fiber.Map{"error": "Invalid report ID"},
+		)
+	}
+
+	requestID, err := strconv.ParseUint(
+		c.Params("request_id"),
+		10,
+		64,
+	)
+
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			fiber.Map{"error": "Invalid request ID"},
+		)
+	}
+
+	claims := middleware.GetClaims(c)
+
+	report, err := h.reportSvc.ApproveDetectionEdit(
+		uint(reportID),
+		uint(requestID),
+		claims.UserID,
+		claims.Name,
+	)
+
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			fiber.Map{"error": err.Error()},
+		)
+	}
+
+	return c.JSON(
+		fiber.Map{
+			"message": "Detection edit approved",
+			"report":  report,
+		},
+	)
+}
+
+func (h *ReportHandler) RejectDetectionEdit(c *fiber.Ctx) error {
+	// ============================================================
+	// PARSE REPORT ID
+	// ============================================================
+
+	reportID, err := strconv.ParseUint(
+		c.Params("id"),
+		10,
+		64,
+	)
+
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			fiber.Map{
+				"error": "Invalid report ID",
+			},
+		)
+	}
+
+	// ============================================================
+	// PARSE REQUEST ID
+	// ============================================================
+
+	requestID, err := strconv.ParseUint(
+		c.Params("request_id"),
+		10,
+		64,
+	)
+
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			fiber.Map{
+				"error": "Invalid request ID",
+			},
+		)
+	}
+
+	// ============================================================
+	// REQUEST PAYLOAD
+	// ============================================================
+
+	type RejectDetectionEditPayload struct {
+		Note string `json:"note"`
+	}
+
+	var payload RejectDetectionEditPayload
+
+	// ============================================================
+	// PARSE JSON BODY
+	// ============================================================
+
+	if err := c.BodyParser(&payload); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			fiber.Map{
+				"error": "Invalid request body",
+			},
+		)
+	}
+
+	// ============================================================
+	// VALIDATION
+	// ============================================================
+
+	payload.Note = strings.TrimSpace(payload.Note)
+
+	if payload.Note == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			fiber.Map{
+				"error": "Rejection reason is required",
+			},
+		)
+	}
+
+	// ============================================================
+	// GET USER CLAIMS
+	// ============================================================
+
+	claims := middleware.GetClaims(c)
+
+	if claims == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(
+			fiber.Map{
+				"error": "Unauthorized",
+			},
+		)
+	}
+
+	// ============================================================
+	// REJECT DETECTION EDIT
+	// ============================================================
+
+	err = h.reportSvc.RejectDetectionEdit(
+		uint(reportID),
+		uint(requestID),
+		payload.Note,
+		claims.UserID,
+		claims.Name,
+	)
+
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			fiber.Map{
+				"error": err.Error(),
+			},
+		)
+	}
+
+	// ============================================================
+	// RESPONSE
+	// ============================================================
+
+	return c.JSON(
+		fiber.Map{
+			"message": "Detection edit rejected",
+		},
+	)
 }

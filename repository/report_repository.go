@@ -44,42 +44,99 @@ func (r *ReportRepository) FindAll(filters map[string]interface{}) ([]model.Risk
 	query := database.DB.Model(&model.RiskReport{}).
 		Preload("Location").
 		Preload("Department").
-		Preload("PIC")
+		Preload("PIC").
+		Preload("EditRequests", "status = ?", model.EditRequestPending)
+
+	// ============================================================
+	// FILTER STATUS
+	// ============================================================
 
 	if status, ok := filters["status"]; ok && status != "" {
-		query = query.Where("status = ?", status)
-	}
-	if site, ok := filters["site"]; ok && site != "" {
-		query = query.Joins("JOIN locations ON locations.id = risk_reports.location_id").
-			Where("locations.site = ?", site)
-	}
-	if deptID, ok := filters["department_id"]; ok && deptID != "" {
-		query = query.Where("department_id = ?", deptID)
-	}
-	if level, ok := filters["risk_level"]; ok && level != "" {
-		query = query.Where("risk_level = ?", level)
-	}
-	if from, ok := filters["date_from"]; ok && from != "" {
-		query = query.Where("created_at >= ?", from)
-	}
-	if to, ok := filters["date_to"]; ok && to != "" {
-		query = query.Where("created_at <= ?", to)
+		query = query.Where("risk_reports.status = ?", status)
 	}
 
-	query.Count(&total)
+	// ============================================================
+	// FILTER SITE
+	// ============================================================
+
+	if site, ok := filters["site"]; ok && site != "" {
+		query = query.
+			Joins("JOIN locations ON locations.id = risk_reports.location_id").
+			Where("locations.site = ?", site)
+	}
+
+	// ============================================================
+	// FILTER DEPARTMENT
+	// ============================================================
+
+	if deptID, ok := filters["department_id"]; ok && deptID != nil && deptID != "" {
+		query = query.Where("risk_reports.department_id = ?", deptID)
+	}
+
+	// ============================================================
+	// FILTER RISK LEVEL
+	// ============================================================
+
+	if level, ok := filters["risk_level"]; ok && level != "" {
+		query = query.Where("risk_reports.risk_level = ?", level)
+	}
+
+	// ============================================================
+	// FILTER DATE FROM
+	// ============================================================
+
+	if from, ok := filters["date_from"]; ok && from != "" {
+		query = query.Where("risk_reports.created_at >= ?", from)
+	}
+
+	// ============================================================
+	// FILTER DATE TO
+	// ============================================================
+
+	if to, ok := filters["date_to"]; ok && to != "" {
+		query = query.Where("risk_reports.created_at <= ?", to)
+	}
+
+	// ============================================================
+	// COUNT
+	// ============================================================
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// ============================================================
+	// PAGINATION
+	// ============================================================
 
 	page := 1
 	pageSize := 25
+
 	if p, ok := filters["page"].(int); ok && p > 0 {
 		page = p
 	}
+
 	if ps, ok := filters["page_size"].(int); ok && ps > 0 {
 		pageSize = ps
 	}
 
 	offset := (page - 1) * pageSize
-	err := query.Order("created_at desc").Offset(offset).Limit(pageSize).Find(&reports).Error
-	return reports, total, err
+
+	// ============================================================
+	// GET DATA
+	// ============================================================
+
+	err := query.
+		Order("risk_reports.created_at desc").
+		Offset(offset).
+		Limit(pageSize).
+		Find(&reports).Error
+
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return reports, total, nil
 }
 
 func (r *ReportRepository) Update(report *model.RiskReport) error {
@@ -96,6 +153,7 @@ func (r *ReportRepository) AddFile(file *model.ReportFile) error {
 
 func (r *ReportRepository) FindByID(id uint) (*model.RiskReport, error) {
 	var report model.RiskReport
+
 	err := database.DB.
 		Preload("Location").
 		Preload("Department").
@@ -103,7 +161,9 @@ func (r *ReportRepository) FindByID(id uint) (*model.RiskReport, error) {
 		Preload("Files").
 		Preload("Files.Activity").
 		Preload("Activities").
+		Preload("EditRequests").
 		First(&report, id).Error
+
 	return &report, err
 }
 
@@ -231,4 +291,55 @@ func (r *ReportRepository) DashboardStats(filters map[string]interface{}) (map[s
 	stats["monthly"] = monthStats
 
 	return stats, nil
+}
+
+func (r *ReportRepository) FindPendingEditRequest(
+	reportID uint,
+) (*model.ReportEditRequest, error) {
+
+	var request model.ReportEditRequest
+
+	err := database.DB.
+		Preload("Location").
+		Preload("Department").
+		Where("report_id = ? AND status = ?", reportID, model.EditRequestPending).
+		First(&request).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &request, nil
+}
+
+func (r *ReportRepository) FindEditRequestByID(
+	reportID uint,
+	requestID uint,
+) (*model.ReportEditRequest, error) {
+
+	var request model.ReportEditRequest
+
+	err := database.DB.
+		Preload("Location").
+		Preload("Department").
+		Where("id = ? AND report_id = ?", requestID, reportID).
+		First(&request).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &request, nil
+}
+
+func (r *ReportRepository) CreateEditRequest(
+	request *model.ReportEditRequest,
+) error {
+	return database.DB.Create(request).Error
+}
+
+func (r *ReportRepository) UpdateEditRequest(
+	request *model.ReportEditRequest,
+) error {
+	return database.DB.Save(request).Error
 }
