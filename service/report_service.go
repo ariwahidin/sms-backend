@@ -20,32 +20,152 @@ import (
 )
 
 type ReportService struct {
-	reportRepo *repository.ReportRepository
-	emailSvc   *email.EmailService
+	reportRepo         *repository.ReportRepository
+	safetyCategoryRepo *repository.SafetyCategoryRepository
+	emailSvc           *email.EmailService
 }
 
-func NewReportService(reportRepo *repository.ReportRepository, emailSvc *email.EmailService) *ReportService {
-	return &ReportService{reportRepo: reportRepo, emailSvc: emailSvc}
+// func NewReportService(reportRepo *repository.ReportRepository, emailSvc *email.EmailService) *ReportService {
+// 	return &ReportService{reportRepo: reportRepo, emailSvc: emailSvc}
+// }
+
+func NewReportService(reportRepo *repository.ReportRepository, safetyCategoryRepo *repository.SafetyCategoryRepository, emailSvc *email.EmailService) *ReportService {
+	return &ReportService{reportRepo: reportRepo, safetyCategoryRepo: safetyCategoryRepo, emailSvc: emailSvc}
 }
+
+// type DeclareInput struct {
+// 	LocationID   *uint                   `json:"location_id"`
+// 	DepartmentID *uint                   `json:"department_id"`
+// 	Description  string                  `json:"description"`
+// 	RiskLevel    model.RiskLevel         `json:"risk_level"`
+// 	ReporterName string                  `json:"reporter_name"`
+// 	Files        []*multipart.FileHeader // diisi dari handler, bukan JSON
+// }
 
 type DeclareInput struct {
-	LocationID   *uint                   `json:"location_id"`
-	DepartmentID *uint                   `json:"department_id"`
-	Description  string                  `json:"description"`
-	RiskLevel    model.RiskLevel         `json:"risk_level"`
-	ReporterName string                  `json:"reporter_name"`
-	Files        []*multipart.FileHeader // diisi dari handler, bukan JSON
+	SafetyCategoryID uint
+	LocationID       *uint
+	DepartmentID     *uint
+	Description      string
+	RiskLevel        model.RiskLevel
+	ReporterName     string
+	Files            []*multipart.FileHeader
 }
 
+// func (s *ReportService) Declare(input DeclareInput) (*model.RiskReport, error) {
+// 	if input.Description == "" {
+// 		return nil, errors.New("description is required")
+// 	}
+// 	if input.RiskLevel == "" {
+// 		input.RiskLevel = model.RiskLow
+// 	}
+
+// 	// validasi ukuran semua file sebelum mulai transaksi
+// 	for _, fh := range input.Files {
+// 		if err := ValidateFileSize(fh, config.Cfg.Storage.MaxFileSizeMB); err != nil {
+// 			return nil, err
+// 		}
+// 	}
+
+// 	code, err := s.reportRepo.GenerateCode()
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	report := &model.RiskReport{
+// 		Code:            code,
+// 		LocationID:      input.LocationID,
+// 		DepartmentID:    input.DepartmentID,
+// 		Description:     input.Description,
+// 		RiskLevelOrigin: input.RiskLevel,
+// 		RiskLevel:       input.RiskLevel,
+// 		Status:          model.StatusDeclaration,
+// 		ReporterName:    input.ReporterName,
+// 	}
+
+// 	tx := database.DB.Begin()
+// 	if tx.Error != nil {
+// 		return nil, tx.Error
+// 	}
+
+// 	if err := tx.Create(report).Error; err != nil {
+// 		tx.Rollback()
+// 		return nil, err
+// 	}
+
+// 	// buat activity dulu, supaya dapat ID-nya untuk dikaitkan ke file
+// 	activity := &model.ReportActivity{
+// 		ReportID: report.ID,
+// 		Action:   "declared",
+// 		ToStatus: model.StatusDeclaration,
+// 		Notes:    input.Description,
+// 	}
+// 	if err := tx.Create(activity).Error; err != nil {
+// 		tx.Rollback()
+// 		return nil, err
+// 	}
+
+// 	// upload files jika ada, di-link ke activity "declared" di atas
+// 	var savedPaths []string
+// 	for _, fh := range input.Files {
+// 		savePath, err := SaveUploadedFile(fh, report.ID)
+// 		if err != nil {
+// 			tx.Rollback()
+// 			CleanupFiles(savedPaths)
+// 			return nil, fmt.Errorf("failed to save file %s: %w", fh.Filename, err)
+// 		}
+// 		savedPaths = append(savedPaths, savePath)
+
+// 		rf := &model.ReportFile{
+// 			ReportID:   report.ID,
+// 			ActivityID: &activity.ID,
+// 			FileName:   fh.Filename,
+// 			FilePath:   savePath,
+// 			FileSize:   fh.Size,
+// 			MimeType:   fh.Header.Get("Content-Type"),
+// 		}
+// 		if err := tx.Create(rf).Error; err != nil {
+// 			tx.Rollback()
+// 			CleanupFiles(savedPaths)
+// 			return nil, err
+// 		}
+// 	}
+
+// 	if err := tx.Commit().Error; err != nil {
+// 		CleanupFiles(savedPaths)
+// 		return nil, err
+// 	}
+
+// 	go s.emailSvc.SendDeclarationNotice(report)
+
+// 	return report, nil
+// }
+
 func (s *ReportService) Declare(input DeclareInput) (*model.RiskReport, error) {
+	input.Description = strings.TrimSpace(input.Description)
+
 	if input.Description == "" {
 		return nil, errors.New("description is required")
 	}
+
+	if input.SafetyCategoryID == 0 {
+		return nil, errors.New("safety category is required")
+	}
+
 	if input.RiskLevel == "" {
 		input.RiskLevel = model.RiskLow
 	}
 
-	// validasi ukuran semua file sebelum mulai transaksi
+	// Validate selected safety category.
+	category, err := s.safetyCategoryRepo.FindActiveByID(input.SafetyCategoryID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("selected safety category is invalid or inactive")
+		}
+		return nil, err
+	}
+
+	// Validate all file sizes before starting the transaction.
 	for _, fh := range input.Files {
 		if err := ValidateFileSize(fh, config.Cfg.Storage.MaxFileSizeMB); err != nil {
 			return nil, err
@@ -58,14 +178,15 @@ func (s *ReportService) Declare(input DeclareInput) (*model.RiskReport, error) {
 	}
 
 	report := &model.RiskReport{
-		Code:            code,
-		LocationID:      input.LocationID,
-		DepartmentID:    input.DepartmentID,
-		Description:     input.Description,
-		RiskLevelOrigin: input.RiskLevel,
-		RiskLevel:       input.RiskLevel,
-		Status:          model.StatusDeclaration,
-		ReporterName:    input.ReporterName,
+		Code:             code,
+		SafetyCategoryID: &category.ID,
+		LocationID:       input.LocationID,
+		DepartmentID:     input.DepartmentID,
+		Description:      input.Description,
+		RiskLevelOrigin:  input.RiskLevel,
+		RiskLevel:        input.RiskLevel,
+		Status:           model.StatusDeclaration,
+		ReporterName:     input.ReporterName,
 	}
 
 	tx := database.DB.Begin()
@@ -78,20 +199,20 @@ func (s *ReportService) Declare(input DeclareInput) (*model.RiskReport, error) {
 		return nil, err
 	}
 
-	// buat activity dulu, supaya dapat ID-nya untuk dikaitkan ke file
 	activity := &model.ReportActivity{
 		ReportID: report.ID,
 		Action:   "declared",
 		ToStatus: model.StatusDeclaration,
 		Notes:    input.Description,
 	}
+
 	if err := tx.Create(activity).Error; err != nil {
 		tx.Rollback()
 		return nil, err
 	}
 
-	// upload files jika ada, di-link ke activity "declared" di atas
 	var savedPaths []string
+
 	for _, fh := range input.Files {
 		savePath, err := SaveUploadedFile(fh, report.ID)
 		if err != nil {
@@ -99,6 +220,7 @@ func (s *ReportService) Declare(input DeclareInput) (*model.RiskReport, error) {
 			CleanupFiles(savedPaths)
 			return nil, fmt.Errorf("failed to save file %s: %w", fh.Filename, err)
 		}
+
 		savedPaths = append(savedPaths, savePath)
 
 		rf := &model.ReportFile{
@@ -109,6 +231,7 @@ func (s *ReportService) Declare(input DeclareInput) (*model.RiskReport, error) {
 			FileSize:   fh.Size,
 			MimeType:   fh.Header.Get("Content-Type"),
 		}
+
 		if err := tx.Create(rf).Error; err != nil {
 			tx.Rollback()
 			CleanupFiles(savedPaths)
@@ -120,6 +243,9 @@ func (s *ReportService) Declare(input DeclareInput) (*model.RiskReport, error) {
 		CleanupFiles(savedPaths)
 		return nil, err
 	}
+
+	// Load relation for email notification.
+	report.SafetyCategory = category
 
 	go s.emailSvc.SendDeclarationNotice(report)
 
@@ -542,11 +668,12 @@ func sanitizeFileName(name string) string {
 }
 
 type RequestDetectionEditInput struct {
-	LocationID   *uint
-	DepartmentID *uint
-	RiskLevel    model.RiskLevel
-	Description  string
-	Reason       string
+	SafetyCategoryID *uint
+	LocationID       *uint
+	DepartmentID     *uint
+	RiskLevel        model.RiskLevel
+	Description      string
+	Reason           string
 
 	ByUserID   uint
 	ByUserName string
@@ -596,8 +723,9 @@ func (s *ReportService) RequestDetectionEdit(
 	request := &model.ReportEditRequest{
 		ReportID: report.ID,
 
-		LocationID:   input.LocationID,
-		DepartmentID: input.DepartmentID,
+		SafetyCategoryID: input.SafetyCategoryID,
+		LocationID:       input.LocationID,
+		DepartmentID:     input.DepartmentID,
 
 		RiskLevel:   input.RiskLevel,
 		Description: input.Description,
@@ -695,6 +823,7 @@ func (s *ReportService) ApproveDetectionEdit(
 	// =========================================================
 
 	report.LocationID = request.LocationID
+	report.SafetyCategoryID = request.SafetyCategoryID
 	report.DepartmentID = request.DepartmentID
 	report.RiskLevel = request.RiskLevel
 	report.Description = request.Description
@@ -816,4 +945,47 @@ func (s *ReportService) RejectDetectionEdit(
 	}
 
 	return s.reportRepo.AddActivity(activity)
+}
+
+func (s *ReportService) Delete(
+	reportID uint,
+	userID uint,
+	userName string,
+) error {
+
+	if reportID == 0 {
+		return errors.New("invalid report ID")
+	}
+
+	// Check whether report exists.
+	report, err := s.reportRepo.FindByID(reportID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("report not found")
+		}
+
+		return err
+	}
+
+	// Prepare deletion audit activity.
+	activity := &model.ReportActivity{
+		ReportID:   report.ID,
+		Action:     "deleted",
+		FromStatus: report.Status,
+		ToStatus:   report.Status,
+		Notes:      fmt.Sprintf("Report %s deleted by administrator", report.Code),
+		ByUserID:   &userID,
+		ByUserName: userName,
+	}
+
+	// Delete report and create activity atomically.
+	if err := s.reportRepo.DeleteWithActivity(report.ID, activity); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("report not found")
+		}
+
+		return fmt.Errorf("failed to delete report: %w", err)
+	}
+
+	return nil
 }

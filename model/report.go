@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
 
 type ReportStatus string
 type RiskLevel string
@@ -43,8 +47,15 @@ var SLAHours = map[Priority]map[string]int{
 }
 
 type RiskReport struct {
-	ID              uint         `gorm:"primaryKey;autoIncrement" json:"id"`
-	Code            string       `gorm:"uniqueIndex;size:20;not null" json:"code"`
+	ID   uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Code string `gorm:"uniqueIndex;size:20;not null" json:"code"`
+
+	// SafetyCategoryID uint            `gorm:"not null;index" json:"safety_category_id"`
+	// SafetyCategory   *SafetyCategory `gorm:"foreignKey:SafetyCategoryID" json:"safety_category,omitempty"`
+
+	SafetyCategoryID *uint           `gorm:"index" json:"safety_category_id"`
+	SafetyCategory   *SafetyCategory `gorm:"foreignKey:SafetyCategoryID" json:"safety_category,omitempty"`
+
 	LocationID      *uint        `json:"location_id"`
 	Location        *Location    `gorm:"foreignKey:LocationID" json:"location,omitempty"`
 	DepartmentID    *uint        `json:"department_id"`
@@ -87,8 +98,12 @@ type RiskReport struct {
 
 	EditRequests []ReportEditRequest `gorm:"foreignKey:ReportID" json:"edit_requests,omitempty"`
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	// CreatedAt time.Time `json:"created_at"`
+	// UpdatedAt time.Time `json:"updated_at"`
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 type ReportFile struct {

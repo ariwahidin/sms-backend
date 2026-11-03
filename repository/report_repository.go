@@ -6,6 +6,8 @@ import (
 
 	"sms-backend/database"
 	"sms-backend/model"
+
+	"gorm.io/gorm"
 )
 
 type ReportRepository struct{}
@@ -162,6 +164,7 @@ func (r *ReportRepository) FindByID(id uint) (*model.RiskReport, error) {
 		Preload("Files.Activity").
 		Preload("Activities").
 		Preload("EditRequests").
+		Preload("SafetyCategory").
 		First(&report, id).Error
 
 	return &report, err
@@ -343,3 +346,61 @@ func (r *ReportRepository) UpdateEditRequest(
 ) error {
 	return database.DB.Save(request).Error
 }
+
+func (r *ReportRepository) DeleteWithActivity(
+	reportID uint,
+	activity *model.ReportActivity,
+) error {
+	return database.DB.Transaction(func(tx *gorm.DB) error {
+		var report model.RiskReport
+
+		// Check report existence.
+		if err := tx.First(&report, reportID).Error; err != nil {
+			return err
+		}
+
+		activity.ReportID = report.ID
+
+		// Create deletion audit activity.
+		if err := tx.Create(activity).Error; err != nil {
+			return err
+		}
+
+		// Soft delete report.
+		if err := tx.Delete(&report).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+}
+
+// func (r *ReportRepository) DeleteWithActivity(
+// 	reportID uint,
+// 	activity *model.ReportActivity,
+// ) error {
+// 	return database.DB.Transaction(func(tx *gorm.DB) error {
+// 		var report model.RiskReport
+
+// 		// Lock report row to prevent concurrent deletion.
+// 		if err := tx.
+// 			Clauses(clause.Locking{Strength: "UPDATE"}).
+// 			First(&report, reportID).Error; err != nil {
+// 			return err
+// 		}
+
+// 		activity.ReportID = report.ID
+
+// 		// Save audit activity before soft deleting the report.
+// 		if err := tx.Create(activity).Error; err != nil {
+// 			return err
+// 		}
+
+// 		// GORM performs soft delete because RiskReport has gorm.DeletedAt.
+// 		if err := tx.Delete(&report).Error; err != nil {
+// 			return err
+// 		}
+
+// 		return nil
+// 	})
+// }

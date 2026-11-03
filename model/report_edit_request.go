@@ -23,6 +23,9 @@ type ReportEditRequest struct {
 	LocationID *uint     `json:"location_id"`
 	Location   *Location `gorm:"foreignKey:LocationID" json:"location,omitempty"`
 
+	SafetyCategoryID *uint           `json:"safety_category_id"`
+	SafetyCategory   *SafetyCategory `gorm:"foreignKey:SafetyCategoryID" json:"safety_category,omitempty"`
+
 	DepartmentID *uint       `json:"department_id"`
 	Department   *Department `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
 

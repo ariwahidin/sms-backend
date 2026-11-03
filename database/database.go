@@ -44,6 +44,7 @@ func autoMigrate() {
 	err := DB.AutoMigrate(
 		&model.User{},
 		&model.Location{},
+		&model.SafetyCategory{},
 		&model.Department{},
 		&model.RiskReport{},
 		&model.ReportFile{},

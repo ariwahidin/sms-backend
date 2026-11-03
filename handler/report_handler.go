@@ -40,10 +40,19 @@ func NewReportHandler(
 }
 
 func (h *ReportHandler) Declare(c *fiber.Ctx) error {
+
+	safetyCategoryID, err := strconv.ParseUint(c.FormValue("safety_category_id"), 10, 32)
+	if err != nil || safetyCategoryID == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Safety category is required",
+		})
+	}
+
 	input := service.DeclareInput{
-		Description:  c.FormValue("description"),
-		RiskLevel:    model.RiskLevel(c.FormValue("risk_level")),
-		ReporterName: c.FormValue("reporter_name"),
+		SafetyCategoryID: uint(safetyCategoryID),
+		Description:      c.FormValue("description"),
+		RiskLevel:        model.RiskLevel(c.FormValue("risk_level")),
+		ReporterName:     c.FormValue("reporter_name"),
 	}
 
 	if locID := c.FormValue("location_id"); locID != "" {
@@ -189,20 +198,6 @@ func (h *ReportHandler) GetAll(c *fiber.Ctx) error {
 		"pages":     (total + int64(pageSize) - 1) / int64(pageSize),
 	})
 }
-
-// func (h *ReportHandler) GetByID(c *fiber.Ctx) error {
-// 	id, err := strconv.ParseUint(c.Params("id"), 10, 64)
-// 	if err != nil {
-// 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid ID"})
-// 	}
-
-// 	report, err := h.reportRepo.FindByID(uint(id))
-// 	if err != nil {
-// 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Report not found"})
-// 	}
-
-// 	return c.JSON(report)
-// }
 
 func (h *ReportHandler) GetByID(c *fiber.Ctx) error {
 	id, err := strconv.ParseUint(c.Params("id"), 10, 64)
@@ -511,11 +506,12 @@ func (h *ReportHandler) RequestDetectionEdit(c *fiber.Ctx) error {
 	// =========================================================
 
 	type RequestDetectionEditPayload struct {
-		LocationID   *uint  `json:"location_id"`
-		DepartmentID *uint  `json:"department_id"`
-		RiskLevel    string `json:"risk_level"`
-		Description  string `json:"description"`
-		Reason       string `json:"reason"`
+		SafetyCategoryID *uint  `json:"safety_category_id"`
+		LocationID       *uint  `json:"location_id"`
+		DepartmentID     *uint  `json:"department_id"`
+		RiskLevel        string `json:"risk_level"`
+		Description      string `json:"description"`
+		Reason           string `json:"reason"`
 	}
 
 	var payload RequestDetectionEditPayload
@@ -557,11 +553,12 @@ func (h *ReportHandler) RequestDetectionEdit(c *fiber.Ctx) error {
 	// =========================================================
 
 	input := service.RequestDetectionEditInput{
-		Description:  payload.Description,
-		Reason:       payload.Reason,
-		RiskLevel:    model.RiskLevel(payload.RiskLevel),
-		LocationID:   payload.LocationID,
-		DepartmentID: payload.DepartmentID,
+		Description:      payload.Description,
+		Reason:           payload.Reason,
+		RiskLevel:        model.RiskLevel(payload.RiskLevel),
+		LocationID:       payload.LocationID,
+		DepartmentID:     payload.DepartmentID,
+		SafetyCategoryID: payload.SafetyCategoryID,
 	}
 
 	// =========================================================
@@ -767,4 +764,41 @@ func (h *ReportHandler) RejectDetectionEdit(c *fiber.Ctx) error {
 			"message": "Detection edit rejected",
 		},
 	)
+}
+
+func (h *ReportHandler) Delete(c *fiber.Ctx) error {
+	// Validate report ID
+	id, err := strconv.ParseUint(c.Params("id"), 10, 64)
+	if err != nil || id == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid report ID",
+		})
+	}
+
+	// Get authenticated user
+	claims := middleware.GetClaims(c)
+	if claims == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "Unauthorized",
+		})
+	}
+
+	// Only Admin can delete reports
+	if claims.Role != model.RoleAdmin {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Only administrators can delete reports",
+		})
+	}
+
+	// Execute deletion through service
+	if err := h.reportSvc.Delete(uint(id), claims.UserID, claims.Name); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "Report deleted successfully",
+		"id":      uint(id),
+	})
 }

@@ -57,12 +57,34 @@ func (r *UserRepository) FindActivePICs(filterByDepartment bool, departmentID ui
 
 // FindActiveHODsByDepartment returns active HOD users for a specific department.
 // If departmentID is 0, returns all active HODs.
+// func (r *UserRepository) FindActiveHODsByDepartment(departmentID uint) ([]model.User, error) {
+// 	var users []model.User
+// 	q := database.DB.Preload("Department").Where("role = ? AND is_active = 1", model.RoleHOD)
+// 	if departmentID > 0 {
+// 		q = q.Where("department_id = ?", departmentID)
+// 	}
+// 	err := q.Find(&users).Error
+// 	return users, err
+// }
+
 func (r *UserRepository) FindActiveHODsByDepartment(departmentID uint) ([]model.User, error) {
 	var users []model.User
-	q := database.DB.Preload("Department").Where("role = ? AND is_active = 1", model.RoleHOD)
+
+	q := database.DB.
+		Preload("Department").
+		Where("role IN ? AND is_active = ?", []model.Role{
+			model.RoleHOD,
+			model.RoleAdmin,
+		}, true)
+
 	if departmentID > 0 {
-		q = q.Where("department_id = ?", departmentID)
+		q = q.Where(
+			"role = ? OR department_id = ?",
+			model.RoleAdmin,
+			departmentID,
+		)
 	}
+
 	err := q.Find(&users).Error
 	return users, err
 }

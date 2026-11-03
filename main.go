@@ -41,6 +41,7 @@ func main() {
 	emailSvc := email.NewEmailService(userRepo)
 
 	locationRepo := repository.NewLocationRepository()
+	safetyCategoryRepo := repository.NewSafetyCategoryRepository()
 	deptRepo := repository.NewDepartmentRepository()
 	reportRepo := repository.NewReportRepository()
 
@@ -48,8 +49,8 @@ func main() {
 	locationSvc := service.NewLocationService(locationRepo)
 	deptSvc := service.NewDepartmentService(deptRepo)
 	userSvc := service.NewUserService(userRepo)
-	reportSvc := service.NewReportService(reportRepo, emailSvc)
-
+	reportSvc := service.NewReportService(reportRepo, safetyCategoryRepo, emailSvc)
+	safetyCategoryService := service.NewSafetyCategoryService(safetyCategoryRepo)
 	authH := handler.NewAuthHandler(authSvc)
 	// reportH := handler.NewReportHandler(reportSvc, reportRepo, emailSvc)
 	reportH := handler.NewReportHandler(
@@ -61,7 +62,7 @@ func main() {
 	locationH := handler.NewLocationHandler(locationSvc)
 	deptH := handler.NewDepartmentHandler(deptSvc)
 	userH := handler.NewUserHandler(userSvc)
-
+	safetyCategoryH := handler.NewSafetyCategoryHandler(safetyCategoryService)
 	// ── 5. Setup Fiber ────────────────────────────────────────────────────────
 	app := fiber.New(fiber.Config{
 		AppName:      "SMS Safety Management System v1.0",
@@ -82,7 +83,7 @@ func main() {
 	app.Static("/uploads", config.Cfg.Storage.UploadDir)
 
 	// ── 6. Register routes ────────────────────────────────────────────────────
-	routes.Setup(app, authSvc, authH, reportH, locationH, deptH, userH)
+	routes.Setup(app, authSvc, authH, reportH, locationH, deptH, userH, safetyCategoryH)
 
 	for _, route := range app.GetRoutes() {
 		fmt.Printf("[%s] %s\n", route.Method, route.Path)
